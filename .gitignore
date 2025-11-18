@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+
+old_back
+python-backend/start.sh
+scripts/unblockIP.js
+scripts/deleteUser.js
+scripts/dropLoginSessionIndex.js

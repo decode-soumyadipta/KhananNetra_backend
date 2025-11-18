@@ -69,8 +69,8 @@ const UserSchema = new mongoose.Schema({
   loginSessions: [{
     sessionId: {
       type: String,
-      required: true,
-      unique: true
+      required: true
+      // Removed unique: true - causes issues with empty arrays and MongoDB indexing
     },
     refreshToken: {
       type: String,
@@ -272,7 +272,7 @@ const UserSchema = new mongoose.Schema({
 // Indexes
 UserSchema.index({ email: 1 });
 UserSchema.index({ isActive: 1 });
-UserSchema.index({ 'loginSessions.sessionId': 1 });
+// Removed: UserSchema.index({ 'loginSessions.sessionId': 1 }); - Caused duplicate key errors with null values
 UserSchema.index({ 'loginSessions.expiresAt': 1 });
 
 // Middleware

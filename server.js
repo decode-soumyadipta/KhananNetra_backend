@@ -12,6 +12,8 @@ import connectDB from './config/database.js';
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
 import adminRoutes from './routes/adminRoutes.js';
+import pythonProxyRoutes from './routes/pythonProxy.js';
+import historyRoutes from './routes/historyRoutes.js';
 
 // Load env vars
 dotenv.config();
@@ -90,6 +92,8 @@ app.use(cookieParser());
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/python', pythonProxyRoutes); // Python backend proxy
+app.use('/api/history', historyRoutes); // Analysis history
 
 // Health check
 app.get('/api/health', (req, res) => {

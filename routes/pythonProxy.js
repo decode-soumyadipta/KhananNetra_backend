@@ -1,0 +1,396 @@
+/**
+ * Python Backend Proxy Routes
+ * Bridges Node.js Express with Python FastAPI for geospatial analysis
+ */
+
+import express from 'express';
+import axios from 'axios';
+import AnalysisHistory from '../models/AnalysisHistory.js';
+import { protect } from '../middleware/auth.js';
+
+const router = express.Router();
+
+// Python backend URL
+const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000';
+
+/**
+ * Health check for Python backend
+ */
+router.get('/health', async (req, res) => {
+  try {
+    const response = await axios.get(`${PYTHON_API_URL}/health`);
+    res.json({
+      status: 'ok',
+      pythonBackend: response.data,
+      message: 'Python backend is reachable'
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'error',
+      message: 'Python backend is not available',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Create AOI from geometry
+ * POST /api/python/aoi/create
+ */
+router.post('/aoi/create', async (req, res) => {
+  try {
+    const { geometry, properties } = req.body;
+
+    if (!geometry || !geometry.type || !geometry.coordinates) {
+      return res.status(400).json({
+        error: 'Invalid geometry. Must include type and coordinates'
+      });
+    }
+
+    console.log('📍 Creating AOI:', { 
+      type: geometry.type, 
+      points: geometry.coordinates[0]?.length 
+    });
+
+    const response = await axios.post(
+      `${PYTHON_API_URL}/api/v1/aoi/create`,
+      { geometry, properties },
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000 // 30 seconds
+      }
+    );
+
+    console.log('✅ AOI created successfully:', response.data.id);
+
+    res.json(response.data);
+  } catch (error) {
+    console.error('❌ AOI creation error:', error.message);
+    
+    if (error.response) {
+      console.error('Python backend error details:', error.response.data);
+      res.status(error.response.status).json({
+        error: error.response.data.detail || 'Failed to create AOI',
+        details: error.response.data
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to communicate with Python backend',
+        message: error.message
+      });
+    }
+  }
+});
+
+/**
+ * Upload AOI file (KML, GeoJSON, Shapefile)
+ * POST /api/python/aoi/upload
+ */
+router.post('/aoi/upload', async (req, res) => {
+  try {
+    // Forward multipart form data to Python backend
+    const formData = new FormData();
+    
+    // This assumes the file is already parsed by multer or similar
+    if (req.file) {
+      formData.append('file', req.file.buffer, req.file.originalname);
+    }
+
+    const response = await axios.post(
+      `${PYTHON_API_URL}/api/v1/aoi/upload`,
+      formData,
+      {
+        headers: {
+          ...formData.getHeaders?.() || {},
+        },
+        timeout: 60000 // 60 seconds for file upload
+      }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    console.error('❌ File upload error:', error.message);
+    
+    if (error.response) {
+      res.status(error.response.status).json({
+        error: error.response.data.detail || 'Failed to upload file',
+        details: error.response.data
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to upload file',
+        message: error.message
+      });
+    }
+  }
+});
+
+/**
+ * Start analysis
+ * POST /api/python/analysis/start
+ */
+router.post('/analysis/start', protect, async (req, res) => {
+  try {
+    const { aoi_id, geometry } = req.body;
+    const userId = req.user._id; // From auth middleware
+
+    if (!aoi_id) {
+      return res.status(400).json({
+        error: 'aoi_id is required'
+      });
+    }
+
+    console.log('🚀 Starting analysis for AOI:', aoi_id, 'User:', userId);
+
+    const response = await axios.post(
+      `${PYTHON_API_URL}/api/v1/analysis/start`,
+      { aoi_id },
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 120000 // 2 minutes for analysis start
+      }
+    );
+
+    console.log('✅ Analysis started:', response.data.analysis_id);
+
+    // Create analysis history record
+    try {
+      const historyRecord = new AnalysisHistory({
+        analysisId: response.data.analysis_id,
+        userId: userId,
+        aoiId: aoi_id,
+        aoiGeometry: geometry || {
+          type: 'Polygon',
+          coordinates: []
+        },
+        status: 'processing',
+        startTime: new Date()
+      });
+
+      await historyRecord.save();
+      console.log('📝 Analysis history record created:', response.data.analysis_id);
+    } catch (historyError) {
+      console.error('⚠️ Failed to create history record:', historyError.message);
+      // Don't fail the request if history saving fails
+    }
+
+    res.json(response.data);
+  } catch (error) {
+    console.error('❌ Analysis start error:', error.message);
+    
+    if (error.response) {
+      res.status(error.response.status).json({
+        error: error.response.data.detail || 'Failed to start analysis',
+        details: error.response.data
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to start analysis',
+        message: error.message
+      });
+    }
+  }
+});
+
+/**
+ * Get analysis status
+ * GET /api/python/analysis/:analysisId
+ */
+router.get('/analysis/:analysisId', protect, async (req, res) => {
+  try {
+    const { analysisId } = req.params;
+    const userId = req.user._id;
+    
+    console.log(`📊 Fetching analysis status for: ${analysisId}`);
+    console.log(`🔗 Python API URL: ${PYTHON_API_URL}/api/v1/analysis/${analysisId}`);
+
+    const response = await axios.get(
+      `${PYTHON_API_URL}/api/v1/analysis/${analysisId}`,
+      {
+        timeout: 5000, // 5 seconds - status check should be fast
+        validateStatus: function (status) {
+          return status < 500; // Resolve only if status < 500
+        }
+      }
+    );
+
+    console.log(`✅ Analysis status retrieved: ${response.status}`);
+    
+    // Update history record with latest status
+    try {
+      const historyRecord = await AnalysisHistory.findOne({ analysisId, userId });
+      
+      if (historyRecord && response.data) {
+        const data = response.data;
+        
+        // Update status
+        if (data.status && data.status !== historyRecord.status) {
+          historyRecord.status = data.status;
+        }
+        
+        // Add processing logs if available
+        if (data.message) {
+          await historyRecord.addLog(
+            data.status || 'processing',
+            data.message,
+            data.progress || 0,
+            'info'
+          );
+        }
+        
+        // If analysis is complete, save results
+        if (data.status === 'completed' && data.results) {
+          await historyRecord.markCompleted(data.results);
+        } else if (data.status === 'failed' && data.error) {
+          await historyRecord.markFailed(data.error);
+        } else {
+          await historyRecord.save();
+        }
+        
+        console.log('📝 History record updated:', analysisId);
+      }
+    } catch (historyError) {
+      console.error('⚠️ Failed to update history record:', historyError.message);
+      // Don't fail the request if history update fails
+    }
+    
+    res.status(response.status).json(response.data);
+  } catch (error) {
+    console.error('❌ Analysis status error:', error.message);
+    
+    if (error.code === 'ECONNABORTED') {
+      console.error('   Timeout - Analysis endpoint took too long to respond');
+      res.status(504).json({
+        error: 'Gateway timeout',
+        message: 'Analysis status check timed out. The Python backend may be overloaded.'
+      });
+    } else if (error.response) {
+      console.error('   Status:', error.response.status);
+      console.error('   Data:', error.response.data);
+      res.status(error.response.status).json({
+        error: error.response.data.detail || 'Failed to get analysis status',
+        details: error.response.data
+      });
+    } else if (error.code === 'ECONNREFUSED') {
+      res.status(503).json({
+        error: 'Python backend is not running',
+        message: 'Please start the Python backend on port 8000'
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to get analysis status',
+        message: error.message
+      });
+    }
+  }
+});
+
+/**
+ * Get imagery for AOI
+ * POST /api/python/imagery/fetch
+ */
+router.post('/imagery/fetch', async (req, res) => {
+  try {
+    const { aoi_id, start_date, end_date } = req.body;
+
+    console.log('🛰️ Fetching imagery for AOI:', aoi_id);
+
+    const response = await axios.post(
+      `${PYTHON_API_URL}/api/v1/imagery/fetch`,
+      { aoi_id, start_date, end_date },
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 120000 // 2 minutes
+      }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    console.error('❌ Imagery fetch error:', error.message);
+    
+    if (error.response) {
+      res.status(error.response.status).json({
+        error: error.response.data.detail || 'Failed to fetch imagery',
+        details: error.response.data
+      });
+    } else {
+      res.status(500).json({
+        error: 'Failed to fetch imagery',
+        message: error.message
+      });
+    }
+  }
+});
+
+/**
+ * Stop/Cancel an ongoing analysis
+ * POST /api/python/analysis/:analysisId/stop
+ */
+router.post('/analysis/:analysisId/stop', protect, async (req, res) => {
+  try {
+    const { analysisId } = req.params;
+    const userId = req.user._id;
+
+    console.log(`🛑 Stopping analysis: ${analysisId}`);
+
+    // Update history record to mark as cancelled
+    let historyRecord = null;
+    try {
+      historyRecord = await AnalysisHistory.findOne({ analysisId, userId });
+      if (historyRecord) {
+        historyRecord.status = 'cancelled';
+        historyRecord.endTime = new Date();
+        historyRecord.duration = Math.floor((historyRecord.endTime - historyRecord.startTime) / 1000);
+        await historyRecord.addLog('cancelled', 'Analysis stopped by user', 0, 'warning');
+        await historyRecord.save();
+        console.log(`✅ Analysis marked as cancelled in database: ${analysisId}`);
+      }
+    } catch (historyError) {
+      console.error('⚠️ Failed to update history record:', historyError.message);
+    }
+
+    // Try to call Python backend to stop analysis (optional, may not be supported)
+    try {
+      await axios.post(
+        `${PYTHON_API_URL}/api/v1/analysis/${analysisId}/stop`,
+        {},
+        {
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          timeout: 5000
+        }
+      );
+      console.log(`✅ Python backend stop signal sent: ${analysisId}`);
+    } catch (pythonError) {
+      // Python backend may not support stop endpoint - that's okay, we've already marked it as cancelled
+      if (pythonError.response?.status === 404) {
+        console.log(`⚠️ Python backend doesn't have stop endpoint - analysis marked as cancelled in DB`);
+      } else {
+        console.warn('⚠️ Warning calling Python stop endpoint:', pythonError.message);
+      }
+    }
+
+    // Return success since we've updated the history
+    res.json({ 
+      success: true, 
+      message: 'Analysis stopped successfully',
+      analysisId,
+      status: 'cancelled'
+    });
+  } catch (error) {
+    console.error('❌ Stop analysis error:', error.message);
+    res.status(500).json({
+      error: 'Failed to stop analysis',
+      message: error.message
+    });
+  }
+});
+
+export default router;
