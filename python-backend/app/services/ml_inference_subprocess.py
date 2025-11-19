@@ -210,7 +210,7 @@ def main():
 
         # Patch inference params (match notebook)
         patch_size = 256
-        overlap = 0.25
+        overlap = 0.5
         step = int(patch_size * (1 - overlap))
 
         pad_H = (ceil(H / step)) * step + patch_size - H
@@ -349,7 +349,7 @@ def main():
         
         # Post-processing parameters - SMOOTH PREDICTIONS WITH PROPER BLENDING
         # With Gaussian blending, we can use a more appropriate threshold
-        threshold = 0.7               # Standard threshold (50%) - smooth predictions allow this
+        threshold = 0.55              # Slightly lower to catch marginal activity
         min_area_pixels = 1000       # Filter out mine blocks under 1000 pixels (substantial blocks only)
         min_area_meters = 1000.0     # 0.1 hectares minimum (capture small operations)
         morphology_kernel = 2        # Smaller kernel to preserve exact boundaries

@@ -6,7 +6,22 @@
 import mongoose from 'mongoose';
 
 const TileSchema = new mongoose.Schema({
-  tile_id: Number,
+  // Store the canonical tile identifier as a string to support numeric IDs and labels like "mosaic"
+  tile_id: {
+    type: String,
+    set: (value) => (value !== undefined && value !== null ? String(value) : value)
+  },
+  // Preserve the original numeric index when available so historical queries keep working
+  tile_index: {
+    type: Number,
+    required: false
+  },
+  // Human readable label (e.g. "mosaic" or "tile_5") for UI display
+  tile_label: {
+    type: String,
+    required: false,
+    set: (value) => (value !== undefined && value !== null ? String(value) : value)
+  },
   bounds: [[Number]], // Array of coordinate pairs
   mining_detected: Boolean,
   mining_percentage: Number,
@@ -15,13 +30,9 @@ const TileSchema = new mongoose.Schema({
   total_area_m2: Number,
   image_base64: String,
   probability_map_base64: String,
-  mine_blocks: [{
-    id: String,
-    coordinates: [[Number]],
-    area_m2: Number,
-    confidence: Number
-  }]
-}, { _id: false });
+  mine_blocks: [mongoose.Schema.Types.Mixed],
+  metadata: mongoose.Schema.Types.Mixed
+}, { _id: false, strict: false });
 
 const ProcessingLogSchema = new mongoose.Schema({
   timestamp: { type: Date, default: Date.now },
@@ -135,6 +146,12 @@ const AnalysisHistorySchema = new mongoose.Schema({
     
     // Individual tiles data
     tiles: [TileSchema],
+
+    // Persisted mosaic/aggregate summary for downstream consumers (frontend, exports)
+    summary: {
+      type: mongoose.Schema.Types.Mixed,
+      required: false
+    },
     
     // Statistics
     statistics: {
@@ -142,6 +159,15 @@ const AnalysisHistorySchema = new mongoose.Schema({
       maxConfidence: Number,
       minConfidence: Number,
       coveragePercentage: Number
+    },
+
+    // Stable mine block identifiers for longitudinal tracking
+    blockTracking: {
+      summary: {
+        total: Number,
+        withPersistentIds: Number
+      },
+      blocks: [mongoose.Schema.Types.Mixed]
     }
   },
   

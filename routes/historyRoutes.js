@@ -295,12 +295,65 @@ router.post('/', async (req, res) => {
       }
     }
 
+    const summary = results?.summary || {};
+    const summaryTotalTiles = summary.total_tiles ?? results?.total_tiles ?? tiles.length;
+    const summaryTilesWithMining = summary.tiles_with_detections ?? tilesWithMining;
+    const summaryMineBlocks = summary.mine_block_count ?? totalMineBlocks;
+    const summaryMiningAreaM2 = typeof summary.mining_area_m2 === 'number' ? summary.mining_area_m2 : null;
+    const summaryCoveragePct = typeof summary.mining_percentage === 'number' ? summary.mining_percentage : null;
+    const summaryConfidence = typeof summary.confidence === 'number' ? summary.confidence : null;
+
+    if (Object.keys(summary).length > 0) {
+      console.log('📌 Summary snapshot:', {
+        totalTiles: summaryTotalTiles,
+        tilesWithDetections: summaryTilesWithMining,
+        mineBlockCount: summaryMineBlocks,
+        miningAreaHa: summaryMiningAreaM2 !== null ? summaryMiningAreaM2 / 10000 : null,
+        miningCoveragePct: summaryCoveragePct,
+        confidencePct: summaryConfidence !== null ? summaryConfidence * 100 : null
+      });
+    }
+
     // Process tiles to ensure mine_blocks have GeoJSON format
-    const processedTiles = (results?.tiles || []).map(tile => ({
-      ...tile,
-      mine_blocks: tile.mine_blocks || [],
-      tile_id: tile.tile_id || tile.id || tile.index
-    }));
+    const processedTiles = (results?.tiles || []).map(tile => {
+      const rawTileId = tile.tile_id ?? tile.id ?? tile.index;
+      const tileId = rawTileId !== undefined && rawTileId !== null ? String(rawTileId) : undefined;
+
+      const tileIndex = typeof tile.index === 'number'
+        ? tile.index
+        : typeof tile.tile_index === 'number'
+          ? tile.tile_index
+          : (() => {
+              if (rawTileId === undefined || rawTileId === null) return undefined;
+              const numericCandidate = Number(rawTileId);
+              return Number.isFinite(numericCandidate) ? numericCandidate : undefined;
+            })();
+
+      const tileLabel = tile.tile_label
+        ?? (typeof rawTileId === 'string' ? rawTileId : undefined)
+        ?? (tileIndex !== undefined ? `tile_${tileIndex}` : undefined);
+
+      const mineBlocks = Array.isArray(tile.mine_blocks)
+        ? tile.mine_blocks
+        : Array.isArray(tile.mineBlocks)
+          ? tile.mineBlocks
+          : [];
+
+      return {
+        ...tile,
+        tile_id: tileId,
+        tile_index: tileIndex,
+        tile_label: tileLabel,
+        mine_blocks: mineBlocks,
+        metadata: {
+          ...(tile.metadata || {}),
+          sourceTileIndex: tileIndex ?? tile.index,
+          sourceBands: tile.bands_used || tile.bands,
+          dimensions: tile.mask_shape || (tile.size ? tile.size.split('x').map(Number) : undefined),
+          isMosaic: tile.status === 'mosaic'
+        }
+      };
+    });
 
     console.log(`🗂️  Processing ${processedTiles.length} tiles`);
     const tilesWithBlocks = processedTiles.filter(t => t.mine_blocks && t.mine_blocks.length > 0);
@@ -350,6 +403,51 @@ router.post('/', async (req, res) => {
       }
     }
 
+    const trackedBlocks = processedTiles.flatMap(tile => {
+      if (!Array.isArray(tile.mine_blocks) || tile.mine_blocks.length === 0) {
+        return [];
+      }
+
+      return tile.mine_blocks.map(block => {
+        const props = block?.properties || {};
+        const persistentId = props.persistent_id || props.block_id || null;
+        const boundsArray = Array.isArray(props.bbox) && props.bbox.length === 4 ? props.bbox : null;
+        const centroidArray = Array.isArray(props.label_position) && props.label_position.length >= 2
+          ? props.label_position
+          : null;
+
+        return {
+          persistentId,
+          blockId: props.block_id || null,
+          sequence: typeof props.block_index === 'number' ? props.block_index : null,
+          tileId: props.tile_id || tile.tile_id || tile.tile_label || null,
+          name: props.name || null,
+          areaM2: typeof props.area_m2 === 'number' ? props.area_m2 : null,
+          areaHa: typeof props.area_m2 === 'number' ? props.area_m2 / 10000 : null,
+          avgConfidence: typeof props.avg_confidence === 'number' ? props.avg_confidence : null,
+          centroid: centroidArray,
+          bounds: boundsArray,
+          analysisId,
+          updatedAt: new Date()
+        };
+      });
+    });
+
+    trackedBlocks.sort((a, b) => {
+      if (a.sequence !== null && b.sequence !== null) {
+        return a.sequence - b.sequence;
+      }
+      if (a.areaHa !== null && b.areaHa !== null) {
+        return b.areaHa - a.areaHa;
+      }
+      return 0;
+    });
+
+    const blockTrackingSummary = {
+      total: trackedBlocks.length,
+      withPersistentIds: trackedBlocks.filter(block => !!block.persistentId).length
+    };
+
     // Calculate duration
     const startTime = new Date(results?.start_time || results?.created_at || Date.now());
     const endTime = new Date();
@@ -370,16 +468,20 @@ router.post('/', async (req, res) => {
       progress: 100,
       logs: logs || [],
       results: {
-        totalTiles: results?.total_tiles || results?.tiles?.length || processedTiles.length || 0,
-        tilesProcessed: results?.tiles_processed || processedTiles.length || 0,
-        tilesWithMining: tilesWithMining || 0,
-        detectionCount: totalMineBlocks || 0,  // Use the robust totalMineBlocks calculation above
+        totalTiles: summaryTotalTiles || processedTiles.length || 0,
+        tilesProcessed: summaryTotalTiles || results?.tiles_processed || processedTiles.length || 0,
+        tilesWithMining: summaryTilesWithMining || 0,
+        detectionCount: summaryMineBlocks || 0,  // Use summary first, fallback to robust computation
         totalMiningArea: (() => {
           // Calculate total mining area from multiple sources
-          let totalAreaM2 = 0;
+          let totalAreaM2 = summaryMiningAreaM2 ?? 0;
           
+          // Prefer summary payload when provided
+          if (totalAreaM2 && totalAreaM2 > 0) {
+            // Already populated from summary
+          }
           // Try 1: Use total_mining_area_ha from Python (converted)
-          if (results?.total_mining_area_ha && results.total_mining_area_ha > 0) {
+          else if (results?.total_mining_area_ha && results.total_mining_area_ha > 0) {
             totalAreaM2 = results.total_mining_area_ha * 10000; // ha to m²
           }
           // Try 2: Use total_mining_area_m2 from Python
@@ -417,11 +519,16 @@ router.post('/', async (req, res) => {
         mergedBlocks: results?.merged_blocks || null,
         tiles: processedTiles,
         statistics: {
-          avgConfidence: results?.avg_confidence || 0,
+          avgConfidence: summaryConfidence !== null ? summaryConfidence * 100 : (results?.avg_confidence || 0),
           maxConfidence: results?.max_confidence || 0,
           minConfidence: results?.min_confidence || 0,
-          coveragePercentage: results?.mining_coverage_percentage || 0
-        }
+          coveragePercentage: summaryCoveragePct ?? (results?.mining_coverage_percentage || 0)
+        },
+        blockTracking: {
+          summary: blockTrackingSummary,
+          blocks: trackedBlocks
+        },
+        summary: Object.keys(summary).length > 0 ? summary : undefined
       },
       metadata: metadata || {}
     };
@@ -432,6 +539,9 @@ router.post('/', async (req, res) => {
     console.log(`   └─ Detection count (mine blocks): ${analysisData.results.detectionCount}`);
     console.log(`   └─ Duration: ${analysisData.duration} seconds`);
     console.log(`   └─ Total mining area: ${analysisData.results.totalMiningArea.hectares.toFixed(2)} ha (${analysisData.results.totalMiningArea.m2.toFixed(0)} m²)`);
+    if (analysisData.results.summary) {
+      console.log('   └─ Summary payload stored');
+    }
 
     let analysis;
     let isUpdate = false;

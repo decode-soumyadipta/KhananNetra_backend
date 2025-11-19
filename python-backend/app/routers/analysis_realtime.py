@@ -646,6 +646,43 @@ async def process_analysis_realtime(analysis_id: str, aoi_geometry: AOIGeometry)
         }
         analysis_results[analysis_id]["tiles"].append(mosaic_tile_entry)
 
+        # Aggregate summary statistics for downstream consumers
+        source_tile_total = len(all_tiles) if 'all_tiles' in locals() else len(analysis_results[analysis_id]["tiles"])
+        mining_area_m2 = total_area_m2 or 0.0
+
+        summary_payload = {
+            "analysis_id": analysis_id,
+            "total_tiles": source_tile_total,
+            "tiles_with_detections": 1 if mining_detected else 0,
+            "mining_detected": mining_detected,
+            "mine_block_count": num_mine_blocks,
+            "mining_pixels": mining_pixels,
+            "total_pixels": total_pixels,
+            "mining_percentage": mining_percentage,
+            "mining_area_m2": mining_area_m2,
+            "confidence": confidence_value,
+            "mask_shape": mask_shape,
+            "bounds": mosaic_bounds,
+            "crs": mosaic_crs
+        }
+
+        analysis_results[analysis_id]["summary"] = summary_payload
+        analysis_results[analysis_id]["total_tiles"] = source_tile_total
+        analysis_results[analysis_id]["tiles_with_mining"] = summary_payload["tiles_with_detections"]
+        analysis_results[analysis_id]["total_mine_blocks"] = num_mine_blocks
+        analysis_results[analysis_id]["total_mining_area_m2"] = mining_area_m2
+        analysis_results[analysis_id]["mining_coverage_percentage"] = mining_percentage
+
+        print("\n----- ANALYSIS SUMMARY -----")
+        print(f"Analysis ID        : {analysis_id}")
+        print(f"Tiles (source/mosaic): {source_tile_total}/1")
+        print(f"Mine blocks        : {num_mine_blocks}")
+        print(f"Mining coverage    : {mining_percentage:.2f}%")
+        print(f"Mining area        : {mining_area_m2/10_000:.2f} ha ({mining_area_m2/1_000_000:.4f} km²)")
+        print(f"Confidence (max)   : {confidence_value * 100:.1f}%")
+        print(f"Mask dimensions    : {mask_shape[1]} x {mask_shape[0]} pixels")
+        print("---------------------------\n")
+
         # Cleanup large mosaic array to free memory
         del mosaic_array
         gc.collect()
@@ -776,6 +813,8 @@ async def process_analysis_realtime(analysis_id: str, aoi_geometry: AOIGeometry)
             "detections": detections,
             "detection_count": len(detections)
         })
+        analysis_results[analysis_id]["analysis_id"] = analysis_id
+        analysis_results[analysis_id]["completed_at"] = datetime.now().isoformat()
         
         print(f"✅✅✅ Analysis {analysis_id} completed successfully!")
         print(f"   Total tiles displayed: {len(all_tiles)}")

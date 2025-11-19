@@ -11,6 +11,7 @@ import sys
 import numpy as np
 import cv2
 import json
+import hashlib
 from typing import Optional, Dict, List, Tuple
 from shapely.geometry import shape, mapping, Polygon, MultiPolygon
 from shapely.validation import make_valid
@@ -280,11 +281,9 @@ def process_prediction_to_polygons(
     # =====================================================================
     # STEP 6: VECTORIZE TO GEOJSON WITH PROFESSIONAL NUMBERING
     # =====================================================================
-    features = []
-    total_area_m2 = 0
-    total_confidence = 0
+    raw_features: List[Dict] = []
     
-    for block_idx, data in enumerate(contour_data, start=1):
+    for data in contour_data:
         contour = data['contour']
         area_px = data['area_px']
         area_m2 = data['area_m2']
@@ -337,7 +336,7 @@ def process_prediction_to_polygons(
                     # Extract the largest Polygon from the collection
                     polys = [g for g in poly.geoms if g.geom_type == 'Polygon']
                     if not polys:
-                        sys.stderr.write(f"[PostProcess] Warning: GeometryCollection has no Polygons for block {block_idx}\n")
+                        sys.stderr.write("[PostProcess] Warning: GeometryCollection has no Polygons; skipping block\n")
                         sys.stderr.flush()
                         continue
                     poly = max(polys, key=lambda p: p.area)
@@ -345,7 +344,7 @@ def process_prediction_to_polygons(
                     # Take the largest polygon from MultiPolygon
                     poly = max(poly.geoms, key=lambda p: p.area)
                 elif poly.geom_type != 'Polygon':
-                    sys.stderr.write(f"[PostProcess] Warning: Unexpected geometry type {poly.geom_type} for block {block_idx}\n")
+                    sys.stderr.write(f"[PostProcess] Warning: Unexpected geometry type {poly.geom_type}; skipping block\n")
                     sys.stderr.flush()
                     continue
             
@@ -361,51 +360,115 @@ def process_prediction_to_polygons(
                 continue
                 
         except Exception as e:
-            sys.stderr.write(f"[PostProcess] Warning: Failed to create polygon for block {block_idx}: {e}\n")
+            sys.stderr.write(f"[PostProcess] Warning: Failed to create polygon: {e}\n")
             sys.stderr.flush()
             continue
 
         # Calculate centroid for label placement
         try:
             centroid = poly.centroid
-            label_position = [centroid.x, centroid.y]
+            centroid_lon = float(centroid.x)
+            centroid_lat = float(centroid.y)
+            label_position = [centroid_lon, centroid_lat]
         except:
+            centroid_lon = None
+            centroid_lat = None
             label_position = None
 
-        # =====================================================================
-        # STEP 8: BUILD FEATURE WITH PROFESSIONAL METADATA
-        # =====================================================================
-        # Generate unique block ID with analysis and tile prefixes
-        id_prefix = ""
-        if analysis_id:
-            id_prefix += analysis_id[:8] + "-"
-        if tile_id:
-            id_prefix += f"T{tile_id}B"
-        
-        unique_block_id = f"{id_prefix}{block_idx}" if id_prefix else str(block_idx)
-        block_name = f"Block {block_idx}" if not tile_id else f"T{tile_id}B{block_idx}"
-        
-        props = {
-            "block_id": unique_block_id,  # Unique ID: analysis_id-T1B1, T1B2, etc.
-            "name": block_name,  # Professional naming (Block 1, T1B1, etc.)
+        bounds = poly.bounds  # (minx, miny, maxx, maxy)
+
+        raw_features.append({
+            "geometry": mapping(poly),
             "area_px": int(area_px),
-            "avg_confidence": round(avg_confidence, 3),
-            "label_position": label_position,  # For frontend number placement
-            "pixel_coords": pixel_coords  # Add raw pixel coordinates for canvas rendering
+            "area_m2": float(area_m2) if area_m2 is not None else None,
+            "avg_confidence": round(float(avg_confidence), 3),
+            "label_position": label_position,
+            "pixel_coords": pixel_coords,
+            "bounds": [float(bounds[0]), float(bounds[1]), float(bounds[2]), float(bounds[3])],
+            "centroid_lon": centroid_lon,
+            "centroid_lat": centroid_lat
+        })
+
+    if not raw_features:
+        return {
+            "type": "FeatureCollection",
+            "features": [],
+            "metadata": {
+                "block_count": 0,
+                "total_area_m2": 0,
+                "threshold_used": adaptive_thresh,
+                "filtering_stats": {
+                    "total_detected": total_contours,
+                    "filtered_by_pixels": filtered_by_pixels,
+                    "filtered_by_area": filtered_by_area,
+                    "kept": 0
+                }
+            }
         }
-        
-        if area_m2 is not None:
-            props["area_m2"] = round(area_m2, 2)
-            total_area_m2 += area_m2
-        
+
+    features = []
+    total_area_m2 = 0.0
+    total_confidence = 0.0
+    tile_label = str(tile_id) if tile_id not in (None, "") else ""
+    analysis_prefix = (analysis_id[:8] + "-") if analysis_id else ""
+    persistent_prefix = tile_label or "global"
+
+    for idx, entry in enumerate(raw_features, start=1):
+        centroid_lon = entry.get("centroid_lon")
+        centroid_lat = entry.get("centroid_lat")
+        bounds = entry.get("bounds")
+
+        signature_payload = {
+            "tile": persistent_prefix,
+            "centroid": [round(centroid_lon, 6) if centroid_lon is not None else None,
+                          round(centroid_lat, 6) if centroid_lat is not None else None],
+            "bounds": [round(b, 6) if b is not None else None for b in bounds]
+        }
+        signature_str = json.dumps(signature_payload, sort_keys=True)
+        persistent_hash = hashlib.sha1(signature_str.encode("utf-8")).hexdigest()[:12]
+        persistent_id = f"{persistent_prefix}-{persistent_hash}" if persistent_prefix else persistent_hash
+
+        if tile_label:
+            block_code = f"T{tile_label}B{idx}"
+            block_name = block_code
+        else:
+            block_code = f"B{idx}"
+            block_name = f"Block {idx}"
+
+        unique_block_id = f"{analysis_prefix}{block_code}" if analysis_prefix else block_code
+
+        props = {
+            "block_id": unique_block_id,
+            "block_index": idx,
+            "name": block_name,
+            "tile_id": tile_label,
+            "area_px": entry["area_px"],
+            "avg_confidence": entry["avg_confidence"],
+            "label_position": entry["label_position"],
+            "pixel_coords": entry["pixel_coords"],
+            "bbox": bounds,
+            "persistent_id": persistent_id
+        }
+
+        if centroid_lon is not None and centroid_lat is not None:
+            props["centroid_lon"] = centroid_lon
+            props["centroid_lat"] = centroid_lat
+
+        if entry["area_m2"] is not None:
+            props["area_m2"] = round(entry["area_m2"], 2)
+            total_area_m2 += entry["area_m2"]
+
         if crs:
             props["crs"] = str(crs)
-        
-        total_confidence += avg_confidence
+
+        if analysis_id:
+            props["analysis_id"] = analysis_id
+
+        total_confidence += entry["avg_confidence"]
 
         features.append({
             "type": "Feature",
-            "geometry": mapping(poly),
+            "geometry": entry["geometry"],
             "properties": props
         })
 
