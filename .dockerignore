@@ -12,10 +12,6 @@ npm-debug.log
 .gitignore
 .github
 
-# Environment files (will be set in GCP)
-.env
-.env.*
-!.env.example
 
 # Build artifacts
 dist

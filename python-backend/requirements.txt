@@ -1,20 +1,50 @@
-earthengine_api==0.1.409
-fastapi==0.121.3
-geopandas==1.0.1
-kaggle==1.7.4.5
-kagglehub==0.3.13
-numpy==2.3.5
-opencv_python==4.10.0.84
-opencv_python_headless==4.12.0.88
-Pillow==12.0.0
-psutil==7.1.3
-pydantic==2.12.4
-pyproj==3.6.1
-python-dotenv==1.2.1
+# KhananNetra Python Backend Dependencies
+# Updated for compatibility with numpy and opencv
+
+# FastAPI and Web Framework
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+python-multipart==0.0.9
+
+# Basic geospatial (minimal dependencies)
+geopandas==0.14.4
+shapely==2.0.4
+folium==0.16.0
+
+# Machine Learning and Data Science
+numpy==1.24.4
+pandas==2.1.4
+scikit-learn==1.3.2
+
+# Model Download from Kaggle
+kagglehub>=0.2.0
+kaggle>=1.6.0
+scikit-image==0.22.0
+scipy==1.11.4
 rasterio==1.3.10
-Requests==2.32.5
-scipy==1.16.3
-segmentation_models==1.0.1
-Shapely==2.1.2
-tensorflow==2.16.2
-uvicorn==0.38.0
+
+tensorflow==2.15.1
+opencv-python-headless==4.9.0.80
+segmentation-models==1.0.1
+
+# Google Earth Engine (for satellite imagery)
+earthengine-api==0.1.409
+requests==2.31.0
+gdown==5.1.0
+
+# File Processing
+pillow==10.1.0
+
+# Utilities and Configuration
+python-dotenv==1.0.1
+pydantic==2.5.3
+httpx==0.26.0
+aiofiles==23.2.1
+psutil>=5.9.0
+
+# Performance and stability
+uvloop>=0.19.0
+
+# Development
+pytest==8.0.2
+pytest-asyncio==0.23.7
