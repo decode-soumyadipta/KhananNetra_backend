@@ -1,9 +1,10 @@
-# ==============================================================================
+# ============================================================================== 
 # Production Dockerfile for KhananNetra Backend (Node.js + Python)
 # Single stage, always uses port 8080
-# ==============================================================================
+# Force linux/amd64 so pip can pull matching binary wheels (Cloud Run default)
+# ============================================================================== 
 
-FROM node:22-slim
+FROM --platform=linux/amd64 node:22-slim
 
 WORKDIR /app
 
@@ -40,10 +41,14 @@ RUN python3 -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
 # Set up Python backend in virtual environment
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_PREFER_BINARY=1
+
 RUN cd python-backend && \
-    pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir certifi==2023.11.17 && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --upgrade pip setuptools wheel && \
+    pip install certifi==2023.11.17 && \
+    pip install -r requirements.txt
 
 # Create cache directory
 RUN mkdir -p /tmp/kagglehub /app/logs
