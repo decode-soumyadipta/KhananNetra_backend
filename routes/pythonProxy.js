@@ -5,10 +5,20 @@
 
 import express from 'express';
 import axios from 'axios';
+import multer from 'multer';
+import FormData from 'form-data';
 import AnalysisHistory from '../models/AnalysisHistory.js';
 import { protect } from '../middleware/auth.js';
 
 const router = express.Router();
+
+// Store uploads in memory so we can forward buffers to Python backend
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50 MB safety limit
+  },
+});
 
 // Python backend URL - uses environment variable with fallback
 // For local development: http://localhost:8000 (FastAPI default)
@@ -107,23 +117,38 @@ router.post('/aoi/create', async (req, res) => {
  * Upload AOI file (KML, GeoJSON, Shapefile)
  * POST /api/python/aoi/upload
  */
-router.post('/aoi/upload', async (req, res) => {
+router.post('/aoi/upload', upload.single('file'), async (req, res) => {
   try {
+    if (!req.file) {
+      return res.status(400).json({
+        error: 'File upload is required. Expected field name "file".',
+      });
+    }
+
     // Forward multipart form data to Python backend
     const formData = new FormData();
-    
-    // This assumes the file is already parsed by multer or similar
-    if (req.file) {
-      formData.append('file', req.file.buffer, req.file.originalname);
-    }
+
+    formData.append('file', req.file.buffer, {
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+    });
+
+    // Include any additional form fields
+    Object.entries(req.body || {}).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach((item) => formData.append(key, item));
+      } else if (typeof value === 'object' && value !== null) {
+        formData.append(key, JSON.stringify(value));
+      } else if (value !== undefined) {
+        formData.append(key, value);
+      }
+    });
 
     const response = await axios.post(
       `${PYTHON_API_URL}/api/v1/aoi/upload`,
       formData,
       {
-        headers: {
-          ...formData.getHeaders?.() || {},
-        },
+        headers: formData.getHeaders(),
         timeout: 60000 // 60 seconds for file upload
       }
     );
