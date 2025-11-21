@@ -442,6 +442,9 @@ const devFormat = ':method :url :colored-status :res[content-length] - :response
 // Production format - concise logging  
 const prodFormat = ':remote-addr - :method :url :colored-status :res[content-length] - :response-time ms';
 
+// Running behind Cloud Run / reverse proxies; trust the first proxy so X-Forwarded-* headers are honored
+app.set('trust proxy', 1);
+
 // Use different formats based on environment
 app.use(morgan(process.env.NODE_ENV === 'production' ? prodFormat : devFormat, {
   skip: (req) => req.url === '/api/health' // Skip health checks to reduce noise
