@@ -130,8 +130,9 @@ router.post('/logout',  async (req, res, next) => {
       await sessionManager.revokeSession(req.user.id, req.session.sessionId, res);
     } else {
       // Fallback: just clear cookies if no session info
-      res.clearCookie('accessToken');
-      res.clearCookie('refreshToken');
+      const clearOptions = sessionManager.getCookieOptions();
+      res.clearCookie('accessToken', clearOptions);
+      res.clearCookie('refreshToken', clearOptions);
     }
 
     res.status(200).json({
@@ -141,8 +142,9 @@ router.post('/logout',  async (req, res, next) => {
   } catch (error) {
     console.error('Logout error:', error);
     // Still clear cookies even if there's an error
-    res.clearCookie('accessToken');
-    res.clearCookie('refreshToken');
+    const clearOptions = sessionManager.getCookieOptions();
+    res.clearCookie('accessToken', clearOptions);
+    res.clearCookie('refreshToken', clearOptions);
     next(error);
   }
 });
@@ -169,8 +171,9 @@ router.post('/refresh-token', async (req, res, next) => {
     console.error('Token refresh error:', error);
     
     // Clear cookies if refresh fails
-    res.clearCookie('accessToken');
-    res.clearCookie('refreshToken');
+    const clearOptions = sessionManager.getCookieOptions();
+    res.clearCookie('accessToken', clearOptions);
+    res.clearCookie('refreshToken', clearOptions);
     
     return next(new AppError('Invalid refresh token', 401));
   }

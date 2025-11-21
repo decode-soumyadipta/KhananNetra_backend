@@ -31,6 +31,44 @@ class SessionManager {
     this.sessionTimeout = 30 * 24 * 60 * 60 * 1000; // 30 days
     this.accessTokenExpiry = 60 * 60 * 1000; // 1 hour
     this.refreshTokenExpiry = 90 * 24 * 60 * 60 * 1000; // 90 days
+    this.cookieBaseOptions = this.buildCookieBaseOptions();
+  }
+
+  buildCookieBaseOptions() {
+    const parseBool = (value, defaultValue) => {
+      if (value === undefined || value === null) return defaultValue;
+      const normalized = String(value).trim().toLowerCase();
+      return ['1', 'true', 'yes', 'on'].includes(normalized);
+    };
+
+    const secureDefault = process.env.NODE_ENV === 'production';
+    const secure = parseBool(process.env.COOKIE_SECURE, secureDefault);
+
+    const sameSiteInput = (process.env.COOKIE_SAME_SITE || (secure ? 'none' : 'lax')).toLowerCase();
+    const allowedSameSite = new Set(['lax', 'strict', 'none']);
+    let sameSite = allowedSameSite.has(sameSiteInput) ? sameSiteInput : (secure ? 'none' : 'lax');
+
+    if (!secure && sameSite === 'none') {
+      console.warn('⚠️ COOKIE_SAME_SITE=none requires secure cookies. Falling back to "lax" for non-HTTPS environment.');
+      sameSite = 'lax';
+      }
+    
+    const domain = process.env.COOKIE_DOMAIN || undefined;
+
+    return {
+      httpOnly: true,
+      secure,
+      sameSite,
+      domain,
+      path: '/',
+    };
+  }
+
+  getCookieOptions(maxAge) {
+    return {
+      ...this.cookieBaseOptions,
+      ...(Number.isFinite(maxAge) ? { maxAge } : {}),
+    };
   }
 
   // Generate device fingerprint for web
@@ -202,19 +240,9 @@ class SessionManager {
       );
 
       // Set HTTP-only cookies
-      res.cookie('accessToken', accessToken, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'none',
-        maxAge: this.accessTokenExpiry,
-      });
+      res.cookie('accessToken', accessToken, this.getCookieOptions(this.accessTokenExpiry));
 
-      res.cookie('refreshToken', refreshToken, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'none',
-        maxAge: this.refreshTokenExpiry
-      });
+      res.cookie('refreshToken', refreshToken, this.getCookieOptions(this.refreshTokenExpiry));
 
       // Clear failed attempts for this IP/email
       await this.clearFailedAttempts(deviceInfo.ip, user.email);
@@ -329,12 +357,7 @@ class SessionManager {
       );
 
       // Set new access token cookie
-      res.cookie('accessToken', newAccessToken, {
-        httpOnly: true,
-        secure: true,
-        sameSite: 'none',
-        maxAge: this.accessTokenExpiry,
-      });
+      res.cookie('accessToken', newAccessToken, this.getCookieOptions(this.accessTokenExpiry));
 
       // Update session last used
       session.lastUsedAt = new Date();
@@ -365,8 +388,9 @@ class SessionManager {
       await user.save();
       
       // Clear cookies
-      res.clearCookie('accessToken');
-      res.clearCookie('refreshToken');
+      const clearOptions = this.getCookieOptions();
+      res.clearCookie('accessToken', clearOptions);
+      res.clearCookie('refreshToken', clearOptions);
       
       return true;
     } catch (error) {

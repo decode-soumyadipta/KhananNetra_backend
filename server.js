@@ -453,10 +453,18 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? prodFormat : devFormat, {
 // Security Middleware
 app.use(helmet());
 
-// CORS - Update to handle credentials properly
+// CORS - allow multiple origins and support credentialed requests
+const allowedOrigins = parseCsvList(process.env.ALLOWED_ORIGINS || process.env.CLIENT_URL || 'http://localhost:3000');
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:3000',
-  credentials: true, // ✅ Important for cookies
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // Allow non-browser requests
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    console.warn(`🚫 Blocked CORS origin: ${origin}`);
+    return callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Cookie']
 }));
