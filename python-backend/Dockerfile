@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code (excluding .h5 model files - they're on Kaggle)
 COPY python-backend/app ./app
 COPY python-backend/main.py .
+COPY python-backend/prestart.py .
 
 # Create models and kagglehub cache directories
 RUN mkdir -p /app/app/models /tmp/kagglehub
@@ -40,5 +41,5 @@ EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD curl -f http://localhost:8001/health || exit 1
 
-# Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "4"]
+# Run prestart hook to warm model, then launch Uvicorn
+CMD ["/bin/sh", "-c", "python prestart.py && uvicorn main:app --host 0.0.0.0 --port 8001 --workers 4 --preload"]
